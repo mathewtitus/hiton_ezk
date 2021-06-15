@@ -162,20 +162,30 @@ class CpnSub:
 
     # replace random variables in the sub with constant values
     # NaN's indicate an unconditioned variable
-    def condition(self, conds: List):
+    def condition(self, conds: List, pert_params: dict):
         conditioned_cpn = self.copy()
         to_replace = np.where(~np.isnan(conds))[0]
-        for ind in to_replace:
-            # create constant variable
-            const_var = CpnVar(
-                            np.random.uniform,                          # variable object
-                            {'low': conds[ind], 'high': conds[ind]},    # parameters
-                            {"R1": np.nan}                              # topology
-                        )
-            # initialize the CpnVar object at given value
-            const_var.resample()
-            # replace the old variable
-            conditioned_cpn[ind] = const_var
+        for ind in np.arange(len(conds)):
+            if ind in to_replace:
+                # create constant variable
+                const_var = CpnVar(
+                                np.random.uniform,                          # variable object
+                                {'low': conds[ind], 'high': conds[ind]},    # parameters
+                                {"R1": np.nan}                              # topology
+                            )
+                # initialize the CpnVar object at given value
+                const_var.resample()
+                # replace the old variable
+                conditioned_cpn[ind] = const_var
+            else:
+                # other variables get perturbed
+                # print("not conditioning var {}".format(ind))
+                cv = conditioned_cpn[ind]
+                # print("it begins with perturbation {}".format(cv.perturbation))
+                cv_params = pert_params[ind]
+                cv.perturb(cv_params['variable'], cv_params['epsilon'])
+                # print("it ends with perturbation {}".format(cv.perturbation))
+                # print("our CpnSub object holds the value {}".format(conditioned_cpn[ind].perturbation))
         return conditioned_cpn
 
     # TODO: create this method to alleviate some of the code in `eliminate` in hiton.py

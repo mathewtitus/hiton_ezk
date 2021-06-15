@@ -9,7 +9,12 @@ import os
 import json
 import numpy as np
 import matplotlib.pyplot as plt
-
+from typing import List
+from hiton_ezk.data_structures import CpnSub, CpnVar
+from scipy.cluster.hierarchy import dendrogram, linkage
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import shortest_path
+    
 
 def get_nhbrs(focal: int, x_pos: np.ndarray, y_pos: np.ndarray, int_rad: float):
     """
@@ -22,6 +27,21 @@ def get_nhbrs(focal: int, x_pos: np.ndarray, y_pos: np.ndarray, int_rad: float):
     dists = np.sqrt( x_dist**2 + y_dist**2 )
     nhbrs = np.where( dists < int_rad )[0]
     return nhbrs
+
+
+def get_gtn(xt, yt, int_rad: float):
+    nagents = len(xt)
+    # if isinstance(frame[0], List):
+    #     xt = [ag[0] for ag in frame]
+    #     yt = [ag[1] for ag in frame]
+    # elif isinstance(frame[0], CpnSub):
+    #     xt = [ag[0].value for ag in frame]
+    #     yt = [ag[1].value for ag in frame]
+    gtn = {}
+    for ag in range(nagents):
+        gt = get_nhbrs(ag, np.array(xt), np.array(yt), int_rad)
+        gtn[ag] = np.setdiff1d(gt, ag)
+    return gtn
 
 
 def get_interaction(style: str, vars1: dict, vars2: dict):
@@ -67,6 +87,7 @@ def plotter(params, t, ax):
     # plt.title(str(t))
     # plt.draw()
     # plt.pause(0.0001)
+    old_axes = plt.gca()
     plt.sca(ax)
     ax.set_xlim([0, 100.0])
     ax.set_ylim([0, 100.0])
@@ -75,7 +96,9 @@ def plotter(params, t, ax):
     ax.title.set_text(str(t))
     plt.draw()
     plt.pause(0.0001)
-    if t%10==9:
+    plt.sca(old_axes)
+    # pause, allow for save
+    if t%10==0:
         filename = input("Press enter to continue.\nEnter a filename to save the simulation state.")
         if filename != "":
             save_dict = {
@@ -93,17 +116,19 @@ def plotter(params, t, ax):
             }
             with open("./"+filename+".json", 'w+') as f:
                 json.dump(save_dict, f, indent=2)
-    # plt.close()
 
 
-def simulate(params: dict):
+def simulate(params: dict, save_file: str = ""):
     """
     Simulation Parameters: torus_len, sigma_theta, v_max, int_rad, flock_coupling, repulsion_coupling, style
     """
     verbose = False
+    if len(save_file) > 0:
+        save_simulation = True
     # unpack parameters
     state = params['state']
     nt = params['duration']
+    print("nt = {}".format(nt))
     int_matrix = params['int_matrix']
     int_rad = params['int_rad']
     v_max = params['v_max']
@@ -156,6 +181,7 @@ def simulate(params: dict):
             vxmat[k,t] = vxmat[k,t] / v_abs * v_target
             vymat[k,t] = vymat[k,t] / v_abs * v_target
         if (params['plot']):
+            gtn = get_gtn(xmat[:,t], ymat[:,t], int_rad)
             plt.ion()
             if 'f' in dir():
                 f.clf()
@@ -165,14 +191,20 @@ def simulate(params: dict):
             plotter(params, t-1, ax[0])
             new_state = [
                 [
-                    xmat[k,t], 
-                    ymat[k,t], 
+                    xmat[k,t],
+                    ymat[k,t],
                     np.arctan2(vymat[k,t], vxmat[k,t])
                 ] 
                 for k in range(nagents)
             ]
-            plotter(params | {'state': new_state}, t, ax[1])
-            plt.close()
+            params = params | {'state': new_state}
+            # plotter(params, t, ax[1])
+            # plt.pause(0.01)
+            ax[1].cla()
+            ax[1].scatter(np.arange(len(state)), [len(gtn[ag]) for ag in gtn])
+            plt.draw()
+            plt.pause(0.01)
+            # plt.close()
     # gather final state of system
     new_state = [
         [
@@ -183,11 +215,25 @@ def simulate(params: dict):
         for k in range(nagents)
     ]
     if verbose: print("simulator output state:\n{}".format(new_state))
+    if save_simulation:
+        sav = {
+            'x': xmat.tolist(), 
+            'y': ymat.tolist(), 
+            'vx': vxmat.tolist(), 
+            'vy': vymat.tolist(), 
+            'species': smat, 
+            'int_matrix': int_matrix, 
+            'int_rad': int_rad
+        }
+        print("sav: {}".format(sav))
+        with open(save_file, "w+") as f:
+            json.dump(sav, f, indent = 2)
     return params | {'state': new_state}
 
 
-def build_boid_params(species_vector, interaction_matrix = [['F']], pert_noise = [15, 3], interaction_radius: float = 5.0, torus_len: float = 100.0):
+def build_boid_params(species_vector, interaction_matrix = [['F']], pert_noise = [15, np.pi/6], interaction_radius: float = 5.0, torus_len: float = 100.0):
     number_agents = len(species_vector)
+    pert_noise[0] = interaction_radius*2/3
     default_state = []
     default_dists = []
     default_topos = []
@@ -251,6 +297,77 @@ def load_params(filename: str):
         ])
     params['distributions'] = default_dists
     return params
+
+
+def plot_from_save(save_file: str):
+    pass
+
+
+def get_blanket(subset: List, network: dict):
+    """
+    """
+    full_blanket = []
+    for ag in subset:
+        # get each elements enighbors = MB(ag)
+        full_blanket += network[ag]
+    blanket_with_reps = np.setdiff1d(full_blanket, subset)
+    blanket = np.unique(blanket_with_reps)
+    blanket.sort()
+    return blanket
+
+
+def get_cluster(subset: List, network: dict):
+    """
+    """
+    full_blanket = subset.copy()
+    if isinstance(full_blanket, np.ndarray):
+        print("making full_blanket a list")
+        full_blanket = full_blanket.tolist()
+    for ag in subset:
+        # get each elements enighbors = MB(ag)
+        if isinstance(network[ag], np.ndarray):
+            print("making network[{}] a list".format(ag))
+            network[ag] = network[ag].tolist()
+        full_blanket += network[ag]
+    blanket = np.unique(full_blanket)
+    blanket.sort()
+    return blanket.tolist()
+
+
+def make_cch(network: dict, plot=False):
+    """
+    """
+    cch = {}
+    for ag in network:
+        hierarchy = [ag]
+        last_cluster_size = 1
+        cluster = get_cluster([ag], network)
+        # hierarchy.append(cluster)
+        while len(cluster) != last_cluster_size:
+            hierarchy.append(cluster)
+            last_cluster_size = len(cluster)
+            cluster = get_cluster(cluster, network)
+            # hierarchy.append(cluster)
+        cch[ag] = hierarchy
+        if plot:
+            nagents = len(network)
+            row = []
+            col = []
+            for agi in network:
+                for agj in network[agi]:
+                    row.append(agi)
+                    col.append(agj)
+            row = np.array(row)
+            col = np.array(col)
+            data = np.ones(row.shape[0], dtype=int)
+            graph = csr_matrix((data, (row, col)), shape=(nagents, nagents))
+            # TODO: This dist matrix is dense and includes inf's, needs to change
+            dist_matrix = shortest_path(graph, directed=False, unweighted=True)
+            Z = linkage(dist_matrix)
+            dn = dendrogram(Z)
+            plt.show()
+    return cch
+
 
 
 

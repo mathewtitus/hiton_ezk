@@ -17,6 +17,7 @@ def estimate_wasserstein(samples, n1, n2, example_var: CpnVar):
     n: int = n1 + n2
     Ag = np.zeros((n+1,n))
     Bg = np.ones((n,n)) # a "pseudoinverse" of Ag
+    # TODO: Calculate Ag & Bg for the R1 topology (formulas below only apply to S1 / T1)
     for i in range(n):
         Ag[i,i] = 1
         Ag[i,np.mod(i+1,n)] = -1
@@ -91,11 +92,10 @@ def estimate_wasserstein(samples, n1, n2, example_var: CpnVar):
     # get optimal value
     value = np.dot(soln, h)
     # occasionally validate the method
-    if np.random.rand() < n/n:
+    if np.random.rand() < 1/n:
         val_soln = linprog(h, A_eq = dists.reshape((1,-1)), b_eq = 0,
-            bounds=[(-1,1) for _ in range(len(remaining_inds))])
-        print("--- Random Quality Control Call ---\nHeuristic method: {}\n\
-            Full linear programming solution: {}".format( np.round(value, 2), np.round(val_soln.value, 2) ))
+            bounds=[(-1,1) for _ in range(len(h))])
+        print("--- Random Quality Control Call ---\nHeuristic method: \t\t\t{}\nFull linear programming solution:\t{}".format( np.round(value, 2), np.round(-val_soln.fun, 2) ))
     # unwind transformation to get solution vector
     beta_soln = dists * soln
     alpha_soln = np.matmul(Bg, beta_soln.reshape((-1,1)))

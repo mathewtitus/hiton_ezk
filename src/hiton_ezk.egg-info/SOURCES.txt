@@ -7,6 +7,7 @@ src/hiton_ezk/data_structures.py
 src/hiton_ezk/ezk.py
 src/hiton_ezk/helper.py
 src/hiton_ezk/hiton.py
+src/hiton_ezk/hiton_local.py
 src/hiton_ezk/test_script.py
 src/hiton_ezk.egg-info/PKG-INFO
 src/hiton_ezk.egg-info/SOURCES.txt

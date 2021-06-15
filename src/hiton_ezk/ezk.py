@@ -17,6 +17,7 @@ def estimate_wasserstein(samples, n1, n2, example_var: CpnVar):
     n: int = n1 + n2
     Ag = np.zeros((n+1,n))
     Bg = np.ones((n,n)) # a "pseudoinverse" of Ag
+    # TODO: Calculate Ag & Bg for the R1 topology (formulas below only apply to S1 / T1)
     for i in range(n):
         Ag[i,i] = 1
         Ag[i,np.mod(i+1,n)] = -1
