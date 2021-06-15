@@ -162,7 +162,7 @@ class CpnSub:
 
     # replace random variables in the sub with constant values
     # NaN's indicate an unconditioned variable
-    def condition(self, conds: List, pert_params: dict):
+    def condition(self, conds, pert_params):
         conditioned_cpn = self.copy()
         to_replace = np.where(~np.isnan(conds))[0]
         for ind in np.arange(len(conds)):
@@ -205,4 +205,8 @@ class CpnSub:
         for m in self.members:
             out_list.append(m.perturbation)
         return out_list
+
+
+    def test(self):
+        return 5
 

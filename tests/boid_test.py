@@ -39,13 +39,16 @@ if False:
         sampler_params['plot'] = True
         old_duration = sampler_params['duration']
         print("duration was {} -- setting to {}".format(old_duration, NT))
-        sampler_params = simulate(sampler_params | {'duration': NT})
-        sampler_params = sampler_params | {'duration': old_duration}
+        # sampler_params = simulate(sampler_params | {'duration': NT})
+        # sampler_params = sampler_params | {'duration': old_duration}
+        sampler_params = simulate(sampler_params.update({'duration': NT}))
+        sampler_params = sampler_params.update({'duration': old_duration})
         print("returning duration to {}".format(sampler_params['duration']))
         sampler_params['plot'] = False
 
     # update the default params object with the values in sampler_param
-    params['sampling_params'] = params['sampling_params'] | sampler_params
+    # params['sampling_params'] = params['sampling_params'] | sampler_params
+    params['sampling_params'] = params['sampling_params'].update(sampler_params)
     state = params['sampling_params']['state']
     specs = params['sampling_params']['species']
     nagents = len(state)
@@ -115,50 +118,75 @@ if False:
 
 # define experiments
 
-expa = {
-    'species': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    'int_rad': 15.0,
-    'int_matrix': [['F']],
-    'state': [],
-    'name': 'A',
-    'frames': []
-}
+try:
+    filename = "../../tests/expa.json"
+    with open(filename, 'r') as f:
+        expa = json.load(f)
+except FileNotFoundError:
+    expa = {
+        'species': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        'int_rad': 15.0,
+        'int_matrix': [['F']],
+        'state': [],
+        'name': 'A',
+        'frames': []
+    }
 
-expb = {
-    'species': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-    'int_rad': 10.0,
-    'int_matrix': [['F', 'A'], ['A', 'F']],
-    'state': [],
-    'name': 'B',
-    'frames': []
-}
+try:
+    filename = "../../tests/expb.json"
+    with open(filename, 'r') as f:
+        expb = json.load(f)
+except FileNotFoundError:
+    expb = {
+        'species': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        'int_rad': 10.0,
+        'int_matrix': [['F', 'A'], ['A', 'F']],
+        'state': [],
+        'name': 'B',
+        'frames': []
+    }
 
-expc = {
-    'species': np.zeros(30, dtype=int).tolist(),
-    'int_rad': 8.0,
-    'int_matrix': [['F']],
-    'state': [],
-    'name': 'C',
-    'frames': []
-}
+try:
+    filename = "../../tests/expc.json"
+    with open(filename, 'r') as f:
+        expc = json.load(f)
+except FileNotFoundError:
+    expc = {
+        'species': np.zeros(30, dtype=int).tolist(),
+        'int_rad': 8.0,
+        'int_matrix': [['F']],
+        'state': [],
+        'name': 'C',
+        'frames': []
+    }
 
-expd = {
-    'species': np.hstack((np.zeros(20, dtype=int), np.ones(20, dtype=int))).tolist(),
-    'int_rad': 8.0,
-    'int_matrix': [['F', 'A'], ['A', 'F']],
-    'state': [],
-    'name': 'D',
-    'frames': []
-}
+try:
+    filename = "../../tests/expd.json"
+    with open(filename, 'r') as f:
+        expd = json.load(f)
+except FileNotFoundError:
+    expd = {
+        'species': np.hstack((np.zeros(20, dtype=int), np.ones(20, dtype=int))).tolist(),
+        'int_rad': 8.0,
+        'int_matrix': [['F', 'A'], ['A', 'F']],
+        'state': [],
+        'name': 'D',
+        'frames': []
+    }
 
-expe = {
-    'species': np.hstack((np.zeros(20, dtype=int), np.ones(20, dtype=int))).tolist(),
-    'int_rad': 8.0,
-    'int_matrix': [['F', 'N'], ['N', 'F']],
-    'state': [],
-    'name': 'E',
-    'frames': []
-}
+try:
+    filename = "../../tests/expe.json"
+    with open(filename, 'r') as f:
+        expe = json.load(f)
+except FileNotFoundError:
+    expe = {
+        'species': np.hstack((np.zeros(20, dtype=int), np.ones(20, dtype=int))).tolist(),
+        'int_rad': 8.0,
+        'int_matrix': [['F', 'N'], ['N', 'F']],
+        'state': [],
+        'name': 'E',
+        'frames': []
+    }
 
 # Simulate Experiment
 trial = 1
@@ -171,7 +199,8 @@ def simulate_experiment(exp: dict):
     # generate params dict, needs sampling_params updated
     # sampling_params: state, distributions, simulator, topologies, target_variable...
     params = define_defaults()
-    params['sampling_params'] = params['sampling_params'] | sampler_params
+    # params['sampling_params'] = params['sampling_params'] | sampler_params
+    params['sampling_params'] = params['sampling_params'].update(sampler_params)
     params['sampling_params']['duration'] = 3000
     params['sampling_params']['plot'] = False
     sim_out = simulate(params['sampling_params'], "../../tests/experiment{}_{}.json".format(exp['name'], trial))
@@ -222,7 +251,9 @@ def make_video(exp: dict):
 ### Record the good frames
 expa['frames'] = [50, 100, 510, 1000]
 expb['frames'] = [330, 490, 2990]
-
+expc['frames'] = [48, 170, 278]
+expd['frames'] = [49, 125, 195]
+expe['frames'] = [195, 350, 1480]
 # Calculate CPNs for those frames
 
 def get_exp_cpn(exp: dict):
@@ -231,12 +262,23 @@ def get_exp_cpn(exp: dict):
     with open(save_name, 'r') as f:
         data = json.load(f)
     for frame in exp['frames']:
-        for ag in range(len(data.shape[0])):
-            state = [data[ag, frame], data[ag, frame], data[ag, frame]]
-            input("experiment's paramaeters, fed into hiton_iterator:\n{}".format(exp['params']))
-            cpn = hiton_iterator(state, exp['params'])
-            with open(save_path + "cpn{}_{}.json".format(exp['name'], trial), 'w+') as f:
-                json.dump(cpn, f)
+        nagents, nt = np.array(data['x']).shape
+        state = [[data['x'][ag][frame], data['y'][ag][frame], np.arctan2(data['vy'][ag][frame], data['vy'][ag][frame])] for ag in range(nagents)]
+        params = define_defaults()
+        sampler_params = build_boid_params(
+            exp['species'], 
+            interaction_matrix=exp['int_matrix'], 
+            interaction_radius=exp['int_rad'])
+        new_samp_params = params['sampling_params']
+        new_samp_params.update(sampler_params)
+        new_samp_params['duration'] = 1
+        new_samp_params['plot'] = False
+        params['sampling_params'] = new_samp_params
+        # print(params)
+        # input("experiment's paramaeters, fed into hiton_iterator:\n{}".format(exp['params']))
+        cpn = hiton_iterator(state, params)
+        with open(save_path + "cpn{}_{}.json".format(exp['name'], trial), 'w+') as f:
+            json.dump(cpn, f)
 
 # Calculate CCH for the network
 

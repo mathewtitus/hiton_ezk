@@ -45,7 +45,8 @@ def sample_function(params: dict):
         # new_state.append(np.random.randn(len(ag)).tolist())
         new_state.append(ag)
     # print("{}\n".format(new_state))
-    return params | {'state': new_state}
+    # return params | {'state': new_state}
+    return params.update({'state': new_state})
 
 
 def rlt_dist(v1: CpnVar, v2: CpnVar):
@@ -54,7 +55,7 @@ def rlt_dist(v1: CpnVar, v2: CpnVar):
     elif v1.topology == "S1":
         return v1.dist(v1.perturbation, v2.perturbation) / (2 * np.pi)
     elif v2.topology == "T1":
-        return v1.dist(v1.perturbation, v2.perturbation) / v1.length
+        return v1.dist(v1.perturbation, v2.perturbation) / (v1.length / np.sqrt(2))
     else:
         raise Exception("Not an ok topology ({}). Tossing an error.".format(v1.topology))
 
@@ -78,9 +79,7 @@ def define_defaults():
     default_sampling_params = {
         'state': [
             [0, 0], 
-            [0, 1]#, 
-#            [1, 0], 
-#            [1, 1]
+            [0, 1]
         ],
         'simulator': sample_function,
         'distributions': [
@@ -107,31 +106,7 @@ def define_defaults():
                     'params': {'loc': 0, 'scale': 0.5},
                     'epsilon': 0.5
                 }
-            ]#,
-            # [
-            #     {
-            #         'variable': np.random.normal,
-            #         'params': {'loc': 0, 'scale': 0.5},
-            #         'epsilon': 0.5
-            #     },
-            #     {
-            #         'variable': np.random.normal,
-            #         'params': {'loc': 0, 'scale': 0.5},
-            #         'epsilon': 0.5
-            #     }
-            # ],
-            # [
-            #     {
-            #         'variable': np.random.normal,
-            #         'params': {'loc': 0, 'scale': 0.5},
-            #         'epsilon': 0.5
-            #     },
-            #     {
-            #         'variable': np.random.normal,
-            #         'params': {'loc': 0, 'scale': 0.5},
-            #         'epsilon': 0.5
-            #     }
-            # ]
+            ]
         ],
         'topologies': [
             [
@@ -141,29 +116,21 @@ def define_defaults():
             [
                 {'R1': np.nan},
                 {'T1': 1}
-            ]#,
-            # [
-            #     {'R1': np.nan},
-            #     {'T1': 1}
-            # ],
-            # [
-            #     {'R1': np.nan},
-            #     {'T1': 1}
-            # ]
+            ]
         ],
         'perturbation': False,
         'target_variable': [0,0], # [agent index, variable index]
         'duration': 1
     }
     # create default values to be overwritten with user inputs
-    N1 = 200
-    N2 = 200
+    N1 = 800
+    N2 = 800
     default_params = {
         'number_per_inclusion': 1,
         'N': 30,
         'N1': N1,
         'N2': N2,
-        'minimum_source_agent_distance': 0.2, # 8/np.sqrt(N1 + N2),
+        'minimum_source_agent_distance': 8/np.sqrt(N1 + N2),
         'causal_threshold': 1.0,
         'c_transform': sigmoid,
         'agent_distance': l2_agent_distance,
@@ -190,6 +157,12 @@ def eliminate(x, y, TPC, system, params):
     copied in from `system`, allowing us to make perturb and 
     dist calls.
     """
+    print(x)
+    print(y)
+    print(TPC)
+    print(system)
+    print(params.keys())
+    print(params['sampling_params'].keys())
     verbose = False
     visual = False
     # assert((x not in TPC) & (y not in TPC)), "Error: source or target agents (x_i = {}, x_j = {}) found in TPC = {}.".format(x,y,TPC)
@@ -244,7 +217,7 @@ def eliminate(x, y, TPC, system, params):
                 else:
                     resamples_required += 1
                     if resamples_required % 1000 == 0: 
-                        print("{} resamples performed so far for x={}, y={}. Consider raising N1 and N2 parameters.".format(resamples_required,x,y))
+                        print("{} < {}: {} resamples performed so far for x={}, y={}. Consider raising N1 and N2 parameters.".format(d_y1_y2, params['minimum_source_agent_distance'], resamples_required,x,y))
     # list all mediating subsets of TPC
     tpc_subsets = powerset(TPC)
     # test I(x, y | Z) for each subset Z
@@ -282,7 +255,16 @@ def eliminate(x, y, TPC, system, params):
                 conditioned_cpnsub_kay.append(sample_kay[agent_ind].copy())
                 conditioned_cpnsub_ell.append(sample_ell[agent_ind].copy())
                 # perform conditioning
-                conditioned_cpnsub_kay[agent_ind] = conditioned_cpnsub_kay[agent_ind].condition(sub_conds_kay[agent_ind], params['sampling_params']['distributions'][agent_ind])
+                print("type getting condition call: {}".format(type(conditioned_cpnsub_kay[agent_ind])))
+                print("subconds: {}".format(sub_conds_kay[agent_ind]))
+                print("subconds type: {}".format(type(sub_conds_kay[agent_ind])))
+                print("distrn: {}".format(params['sampling_params']['distributions'][agent_ind]))
+                print("distrn type: {}".format(type(params['sampling_params']['distributions'][agent_ind])))
+                print("test: {}".format(conditioned_cpnsub_kay[agent_ind].test()))
+                conditioned_cpnsub_kay[agent_ind] = conditioned_cpnsub_kay[agent_ind].condition(
+                        sub_conds_kay[agent_ind], 
+                        params['sampling_params']['distributions'][agent_ind]
+                    )
                 conditioned_cpnsub_ell[agent_ind] = conditioned_cpnsub_ell[agent_ind].condition(sub_conds_ell[agent_ind], params['sampling_params']['distributions'][agent_ind])
             if verbose:
                 print("conditions:\nk: {}\nl: {}\n".format(sub_conds_kay, sub_conds_ell))
@@ -317,10 +299,18 @@ def eliminate(x, y, TPC, system, params):
                 # generate new simulation results from the new sample 
                 sys_kay = [cpn_j.perts_to_list() for cpn_j in conditioned_cpnsub_kay]
                 if verbose & (k1 == 5): print("going into simulator: {}".format(sys_kay))
-                new_mu = simulator(params['sampling_params'] | {
+                # v3.9
+                # new_mu = simulator(params['sampling_params'] | {
+                #     'state': [cpn_sub.perts_to_list() for cpn_sub in conditioned_cpnsub_kay], 
+                #     'perturbation': True
+                # })
+                # v3.7
+                to_update = {
                     'state': [cpn_sub.perts_to_list() for cpn_sub in conditioned_cpnsub_kay], 
                     'perturbation': True
-                })
+                }
+                params['sampling_params'].update(to_update)
+                new_mu = simulator(params['sampling_params'])
                 x_draws[k1] = new_mu['state'][focal_agent][focal_var]
                 if verbose & (k1 == 5): print("coming out of simulator: {}\nx_draw: {}".format(new_mu['state'], x_draws[k1]))
             if visual:
@@ -346,10 +336,18 @@ def eliminate(x, y, TPC, system, params):
                         if (mem_ind == focal_agent)&(var_ind == focal_var):
                             ell_perts.append(conditioned_cpnsub_ell[mem_ind][var_ind].perturbation)
                 # generate new simulation results from the new sample 
-                new_mu = simulator(params['sampling_params'] | {
+                # v3.9
+                # new_mu = simulator(params['sampling_params'] | {
+                #     'state': [cpn_sub.perts_to_list() for cpn_sub in conditioned_cpnsub_ell], 
+                #     'perturbation': True
+                # })
+                # v3.7
+                to_update = {
                     'state': [cpn_sub.perts_to_list() for cpn_sub in conditioned_cpnsub_ell], 
                     'perturbation': True
-                })
+                }
+                params['sampling_params'].update(to_update)
+                new_mu = simulator(params['sampling_params'])
                 x_draws[params['N1'] + k2] = new_mu['state'][focal_agent][focal_var]
             # calculate dependence measure
             W_kl, _ = estimate_wasserstein(x_draws, params['N1'], params['N2'], cpnsub_system[focal_agent][focal_var])
@@ -392,7 +390,12 @@ def hiton(focal_index: int, system: List[List], params: dict):
     assert (focal_index < len(system)), "Focal index ({}) must be less than system size ({}).".format(focal, len(system))
     print("Building LCN for agent {}.".format(focal_index))
     # prepare parameter data
-    params = define_defaults() | params
+    # v3.9
+    # params = define_defaults() | params
+    # v3.7
+    def_params = define_defaults()
+    def_params.update(params)
+    params = def_params
     # initializing...
     nagents = len(system)
     blocking_set = {}
@@ -459,7 +462,10 @@ def hiton_iterator(system: List[List], params: dict):
     'conditions' which contains a list of lists in the same format as `system`
     """
     assert ((sys.version_info.major == 3) & (sys.version_info.minor >= 9)), "System error: Update Python to a version >= 3.9.1"
-    params = define_defaults() | params
+    # params = define_defaults() | params
+    def_params = define_defaults()
+    def_params.update(params)
+    params = def_params
     network = {'params': params, 'tpc': {}, 'blocking_set': {}}
     nagents = len(system)
     for focus in np.arange(nagents, dtype=int):

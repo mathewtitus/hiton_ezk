@@ -123,12 +123,13 @@ def simulate(params: dict, save_file: str = ""):
     Simulation Parameters: torus_len, sigma_theta, v_max, int_rad, flock_coupling, repulsion_coupling, style
     """
     verbose = False
+    save_simulation = False
     if len(save_file) > 0:
         save_simulation = True
     # unpack parameters
     state = params['state']
     nt = params['duration']
-    print("nt = {}".format(nt))
+    # print("nt = {}".format(nt))
     int_matrix = params['int_matrix']
     int_rad = params['int_rad']
     v_max = params['v_max']
@@ -197,7 +198,10 @@ def simulate(params: dict, save_file: str = ""):
                 ] 
                 for k in range(nagents)
             ]
-            params = params | {'state': new_state}
+            # v3.9
+            # params = params | {'state': new_state}
+            # v3.7
+            params.update({'state': new_state})
             # plotter(params, t, ax[1])
             # plt.pause(0.01)
             ax[1].cla()
@@ -228,10 +232,14 @@ def simulate(params: dict, save_file: str = ""):
         print("sav: {}".format(sav))
         with open(save_file, "w+") as f:
             json.dump(sav, f, indent = 2)
-    return params | {'state': new_state}
+    # v3.9
+    # return params | {'state': new_state}
+    # v3.7
+    params.update({'state': new_state})
+    return params
 
 
-def build_boid_params(species_vector, interaction_matrix = [['F']], pert_noise = [15, np.pi/6], interaction_radius: float = 5.0, torus_len: float = 100.0):
+def build_boid_params(species_vector, interaction_matrix = [['F']], pert_noise = [15, np.pi/3], interaction_radius: float = 5.0, torus_len: float = 100.0):
     number_agents = len(species_vector)
     pert_noise[0] = interaction_radius*2/3
     default_state = []

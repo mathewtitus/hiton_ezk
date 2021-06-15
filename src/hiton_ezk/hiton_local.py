@@ -7,6 +7,8 @@
 
 import sys
 import numpy as np
+import multiprocessing as mp
+from multiprocessing.pool import ApplyResult
 from typing import List
 from ezk import estimate_wasserstein
 from helper import powerset, c_subselect, sigmoid
@@ -45,7 +47,8 @@ def sample_function(params: dict):
         # new_state.append(np.random.randn(len(ag)).tolist())
         new_state.append(ag)
     # print("{}\n".format(new_state))
-    return params | {'state': new_state}
+    # return params | {'state': new_state}
+    return params.update({'state': new_state})
 
 
 def rlt_dist(v1: CpnVar, v2: CpnVar):
@@ -54,7 +57,7 @@ def rlt_dist(v1: CpnVar, v2: CpnVar):
     elif v1.topology == "S1":
         return v1.dist(v1.perturbation, v2.perturbation) / (2 * np.pi)
     elif v2.topology == "T1":
-        return v1.dist(v1.perturbation, v2.perturbation) / v1.length
+        return v1.dist(v1.perturbation, v2.perturbation) / (v1.length / np.sqrt(2))
     else:
         raise Exception("Not an ok topology ({}). Tossing an error.".format(v1.topology))
 
@@ -122,8 +125,8 @@ def define_defaults():
         'duration': 1
     }
     # create default values to be overwritten with user inputs
-    N1 = 300
-    N2 = 300
+    N1 = 800
+    N2 = 800
     default_params = {
         'number_per_inclusion': 1,
         'N': 30,
@@ -138,7 +141,103 @@ def define_defaults():
     return default_params
 
 
-def eliminate(x, y, TPC, system, params):
+def mp_cxyK_calc(idx, sample_pairs, samples, x, y, sub, system, params):
+    pair = sample_pairs[idx]
+    simulator = params['sampling_params']['simulator']
+    sample_kay = samples[pair[0]]
+    sample_ell = samples[pair[1]]
+    # collect variable conditions
+    sub_conds_kay = []
+    sub_conds_ell = []
+    # sample_x is a list of CpnSub's so each needs to be conditioned in seq
+    conditioned_cpnsub_kay = []
+    conditioned_cpnsub_ell = []
+    # calculate distance between j^th agents for later
+    d_y1_y2 = params['agent_distance'](sample_kay[y], sample_ell[y])
+    for agent_ind in range(len(system)):
+        if agent_ind in sub:
+            sub_conds_kay.append(sample_kay[agent_ind].perts_to_list())
+            sub_conds_ell.append(sample_kay[agent_ind].perts_to_list())
+        elif agent_ind == y:
+            sub_conds_kay.append(sample_kay[agent_ind].perts_to_list())
+            sub_conds_ell.append(sample_ell[agent_ind].perts_to_list())
+        else:
+            sub_conds_kay.append([np.nan for _ in range(len(sample_kay[agent_ind]))])
+            sub_conds_ell.append([np.nan for _ in range(len(sample_kay[agent_ind]))])
+        # add a copy of agent to conditioned samples
+        conditioned_cpnsub_kay.append(sample_kay[agent_ind].copy())
+        conditioned_cpnsub_ell.append(sample_ell[agent_ind].copy())
+        # perform conditioning
+        conditioned_cpnsub_kay[agent_ind] = conditioned_cpnsub_kay[agent_ind].condition(
+                sub_conds_kay[agent_ind], 
+                params['sampling_params']['distributions'][agent_ind]
+            )
+        conditioned_cpnsub_ell[agent_ind] = conditioned_cpnsub_ell[agent_ind].condition(sub_conds_ell[agent_ind], params['sampling_params']['distributions'][agent_ind])
+    # initialize samples of variable x
+    x_draws = np.zeros(params['N1'] + params['N2'])
+    # 
+    focal_agent = params['sampling_params']['target_variable'][0]
+    focal_var = params['sampling_params']['target_variable'][1]
+    # draw from \mu_{x}(z^k_{K u y)
+    kay_perts = []
+    for k1 in range(params['N1']):
+        for mem_ind in range(len(conditioned_cpnsub_kay)):
+            for var_ind in range(len(conditioned_cpnsub_kay[mem_ind])):
+                # perform perturbation of conditioned system
+                conditioned_cpnsub_kay[mem_ind][var_ind].perturb( 
+                    params['sampling_params']['distributions'][mem_ind][var_ind]['variable'], 
+                    params['sampling_params']['distributions'][mem_ind][var_ind]['epsilon'] 
+                )
+                if (mem_ind == focal_agent)&(var_ind == focal_var):
+                    kay_perts.append(conditioned_cpnsub_kay[mem_ind][var_ind].perturbation)
+        # generate new simulation results from the new sample 
+        sys_kay = [cpn_j.perts_to_list() for cpn_j in conditioned_cpnsub_kay]
+        # v3.9
+        # new_mu = simulator(params['sampling_params'] | {
+        #     'state': [cpn_sub.perts_to_list() for cpn_sub in conditioned_cpnsub_kay], 
+        #     'perturbation': True
+        # })
+        # v3.7
+        to_update = {
+            'state': [cpn_sub.perts_to_list() for cpn_sub in conditioned_cpnsub_kay], 
+            'perturbation': True
+        }
+        params['sampling_params'].update(to_update)
+        new_mu = simulator(params['sampling_params'])
+        x_draws[k1] = new_mu['state'][focal_agent][focal_var]
+    # draw from \mu_{x}(z^ell_{K u y)
+    ell_perts = []
+    for k2 in range(params['N2']):
+        for mem_ind in range(len(conditioned_cpnsub_ell)):
+            for var_ind in range(len(conditioned_cpnsub_ell[mem_ind])):
+                # perform perturbation of conditioned system
+                conditioned_cpnsub_ell[mem_ind][var_ind].perturb( 
+                    params['sampling_params']['distributions'][mem_ind][var_ind]['variable'], 
+                    params['sampling_params']['distributions'][mem_ind][var_ind]['epsilon'] 
+                )
+                if (mem_ind == focal_agent)&(var_ind == focal_var):
+                    ell_perts.append(conditioned_cpnsub_ell[mem_ind][var_ind].perturbation)
+        # generate new simulation results from the new sample 
+        # v3.9
+        # new_mu = simulator(params['sampling_params'] | {
+        #     'state': [cpn_sub.perts_to_list() for cpn_sub in conditioned_cpnsub_ell], 
+        #     'perturbation': True
+        # })
+        # v3.7
+        to_update = {
+            'state': [cpn_sub.perts_to_list() for cpn_sub in conditioned_cpnsub_ell], 
+            'perturbation': True
+        }
+        params['sampling_params'].update(to_update)
+        new_mu = simulator(params['sampling_params'])
+        x_draws[params['N1'] + k2] = new_mu['state'][focal_agent][focal_var]
+    # calculate dependence measure
+    W_kl, _ = estimate_wasserstein(x_draws, params['N1'], params['N2'], cpnsub_system[focal_agent][focal_var])
+    c_xyK = {sub: W_kl / d_y1_y2}
+    return cxyK
+
+
+def eliminate(x, y, TPC, system, params, pool=None):
     """
     Use the EZK dependence measure to determine whether
     variable x is independent of y for some subset of TPC.
@@ -156,6 +255,12 @@ def eliminate(x, y, TPC, system, params):
     copied in from `system`, allowing us to make perturb and 
     dist calls.
     """
+    # print(x)
+    # print(y)
+    # print(TPC)
+    # print(system)
+    # print(params.keys())
+    # print(params['sampling_params'].keys())
     verbose = False
     visual = False
     # assert((x not in TPC) & (y not in TPC)), "Error: source or target agents (x_i = {}, x_j = {}) found in TPC = {}.".format(x,y,TPC)
@@ -210,145 +315,190 @@ def eliminate(x, y, TPC, system, params):
                 else:
                     resamples_required += 1
                     if resamples_required % 1000 == 0: 
-                        print("{} resamples performed so far for x={}, y={}. Consider raising N1 and N2 parameters.".format(resamples_required,x,y))
+                        print("{} < {}: {} resamples performed so far for x={}, y={}. Consider raising N1 and N2 parameters.".format(d_y1_y2, params['minimum_source_agent_distance'], resamples_required,x,y))
     # list all mediating subsets of TPC
     tpc_subsets = powerset(TPC)
     # test I(x, y | Z) for each subset Z
     for sub in tpc_subsets:
         # for each sample pair, generate conditions K, sample from mu_i distributions, and calculate c_xy^K
         c_xyK = []
-        for pair in sample_pairs:
-            if verbose: print("using sample pair ({}, {})".format(pair[0], pair[1]))
-            # samples to calculate W_d^{(k,l)} with
-            sample_kay = samples[pair[0]]
-            sample_ell = samples[pair[1]]
-            # collect variable conditions
-            sub_conds_kay = []
-            sub_conds_ell = []
-            # sample_x is a list of CpnSub's so each needs to be conditioned in seq
-            conditioned_cpnsub_kay = []
-            conditioned_cpnsub_ell = []
-            # calculate distance between j^th agents for later
-            d_y1_y2 = params['agent_distance'](sample_kay[y], sample_ell[y])
-            if verbose:
-                print("sample_kay__________\nvals: {}\nperts: {}".format([sk.values_to_list() for sk in sample_kay], [sk.perts_to_list() for sk in sample_kay]))
-                print("sample_ell__________\nvals: {}\nperts: {}".format([sl.values_to_list() for sl in sample_ell], [sl.perts_to_list() for sl in sample_ell]))
-                print("dist: {}\n".format(d_y1_y2))
-            for agent_ind in range(len(system)):
-                if agent_ind in sub:
-                    sub_conds_kay.append(sample_kay[agent_ind].perts_to_list())
-                    sub_conds_ell.append(sample_kay[agent_ind].perts_to_list())
-                elif agent_ind == y:
-                    sub_conds_kay.append(sample_kay[agent_ind].perts_to_list())
-                    sub_conds_ell.append(sample_ell[agent_ind].perts_to_list())
-                else:
-                    sub_conds_kay.append([np.nan for _ in range(len(sample_kay[agent_ind]))])
-                    sub_conds_ell.append([np.nan for _ in range(len(sample_kay[agent_ind]))])
-                # add a copy of agent to conditioned samples
-                conditioned_cpnsub_kay.append(sample_kay[agent_ind].copy())
-                conditioned_cpnsub_ell.append(sample_ell[agent_ind].copy())
-                # perform conditioning
-                conditioned_cpnsub_kay[agent_ind] = conditioned_cpnsub_kay[agent_ind].condition(sub_conds_kay[agent_ind], params['sampling_params']['distributions'][agent_ind])
-                conditioned_cpnsub_ell[agent_ind] = conditioned_cpnsub_ell[agent_ind].condition(sub_conds_ell[agent_ind], params['sampling_params']['distributions'][agent_ind])
-            if verbose:
-                print("conditions:\nk: {}\nl: {}\n".format(sub_conds_kay, sub_conds_ell))
-                print("conditioned_cpnsub_kay__________\nvals: {}\nperts: {}\n".format([sk.values_to_list() for sk in conditioned_cpnsub_kay], [sk.perts_to_list() for sk in conditioned_cpnsub_kay]))
-                print("conditioned_cpnsub_ell__________\nvals: {}\nperts: {}\n".format([sl.values_to_list() for sl in conditioned_cpnsub_ell], [sl.perts_to_list() for sl in conditioned_cpnsub_ell]))
-            # initialize samples of variable x
-            x_draws = np.zeros(params['N1'] + params['N2'])
-            # 
-            focal_agent = params['sampling_params']['target_variable'][0]
-            focal_var = params['sampling_params']['target_variable'][1]
-            # draw from \mu_{x}(z^k_{K u y)
-            if visual:
-                spc_changes = []
-                ang_changes = []
-            kay_perts = []
-            for k1 in range(params['N1']):
-                for mem_ind in range(len(conditioned_cpnsub_kay)):
-                    for var_ind in range(len(conditioned_cpnsub_kay[mem_ind])):
-                        # perform perturbation of conditioned system
-                        if visual: a0 = conditioned_cpnsub_kay[mem_ind][var_ind].value
-                        conditioned_cpnsub_kay[mem_ind][var_ind].perturb( 
-                            params['sampling_params']['distributions'][mem_ind][var_ind]['variable'], 
-                            params['sampling_params']['distributions'][mem_ind][var_ind]['epsilon'] 
-                        )
-                        if (mem_ind == focal_agent)&(var_ind == focal_var):
-                            kay_perts.append(conditioned_cpnsub_kay[mem_ind][var_ind].perturbation)
-                        if visual: 
-                            if var_ind == 2:
-                                ang_changes.append(conditioned_cpnsub_kay[mem_ind][var_ind].perturbation - a0)
-                            else:
-                                spc_changes.append(conditioned_cpnsub_kay[mem_ind][var_ind].perturbation - a0)
-                # generate new simulation results from the new sample 
-                sys_kay = [cpn_j.perts_to_list() for cpn_j in conditioned_cpnsub_kay]
-                if verbose & (k1 == 5): print("going into simulator: {}".format(sys_kay))
-                new_mu = simulator(params['sampling_params'] | {
-                    'state': [cpn_sub.perts_to_list() for cpn_sub in conditioned_cpnsub_kay], 
-                    'perturbation': True
-                })
-                x_draws[k1] = new_mu['state'][focal_agent][focal_var]
-                if verbose & (k1 == 5): print("coming out of simulator: {}\nx_draw: {}".format(new_mu['state'], x_draws[k1]))
-            if visual:
-                g, bx = plt.subplots(1,2)
-                plt.sca(bx[0])
-                plt.hist(spc_changes, bins=15)
-                plt.sca(bx[1])
-                plt.hist(ang_changes, bins=15)
-                plt.draw()
-                plt.show()
-                input("")
-                plt.close()
-            # draw from \mu_{x}(z^ell_{K u y)
-            ell_perts = []
-            for k2 in range(params['N2']):
-                for mem_ind in range(len(conditioned_cpnsub_ell)):
-                    for var_ind in range(len(conditioned_cpnsub_ell[mem_ind])):
-                        # perform perturbation of conditioned system
-                        conditioned_cpnsub_ell[mem_ind][var_ind].perturb( 
-                            params['sampling_params']['distributions'][mem_ind][var_ind]['variable'], 
-                            params['sampling_params']['distributions'][mem_ind][var_ind]['epsilon'] 
-                        )
-                        if (mem_ind == focal_agent)&(var_ind == focal_var):
-                            ell_perts.append(conditioned_cpnsub_ell[mem_ind][var_ind].perturbation)
-                # generate new simulation results from the new sample 
-                new_mu = simulator(params['sampling_params'] | {
-                    'state': [cpn_sub.perts_to_list() for cpn_sub in conditioned_cpnsub_ell], 
-                    'perturbation': True
-                })
-                x_draws[params['N1'] + k2] = new_mu['state'][focal_agent][focal_var]
-            # calculate dependence measure
-            W_kl, _ = estimate_wasserstein(x_draws, params['N1'], params['N2'], cpnsub_system[focal_agent][focal_var])
-            c_xyK.append(W_kl / d_y1_y2)
-            if visual:
-                plt.ion()
-                _, ax = plt.subplots(1,2)
-                # ax[0].hist(c_xyK)
-                ax[0].hist([kay_perts, ell_perts])
-                n = ax[1].hist([x_draws[:params['N1']], x_draws[params['N1']:]], bins=np.linspace(-np.pi,np.pi - np.pi/6,11))
-                ax[1].title.set_text("c: {}\ndist: {}\nDiff: {}".format(
-                    np.round(c_xyK[-1], 4),
-                    np.round(d_y1_y2, 4),
-                    np.sum(np.abs(n[0][0] - n[0][1]))/np.sum(n[0][0])
-                    )
-                )
-                plt.draw()
-                input("Hit enter for next histogram")
-                plt.close()
-        # # adjust, removing outliers [OPTIONAL]
-        # c_xyK = c_subselect(c_xyK)
-        if sub == []: c = c_xyK
-        # determine whether I(x, y | Z)
-        print("Finished testing I({}, {} | {})\nc_ij^K: {}\ncausal threshold: {}\n".format(x,y,sub,np.max(c_xyK),params['causal_threshold']))
-        if np.max(c_xyK) < params['causal_threshold']:
-            return True, sub, c_xyK
+        if pool:
+            c_lk = {}
+            N = len(sample_pairs)
+            async_results = [ pool.apply_async(
+                mp_cxyK_calc, 
+                args=(_, sample_pairs, samples, x, y, sub, system, params)
+            ) for _ in range(N) ]
+            # waiting for all results
+            map(ApplyResult.wait, async_results)
+            lst_results=[r.get() for r in async_results]
+            [c_lk.update(r) for r in lst_results]
+            # # adjust, removing outliers [OPTIONAL]
+            if sub == []: c = c_xyK
+            # determine whether I(x, y | Z)
+            print("Finished testing I({}, {} | {})\nc_ij^K: {}\ncausal threshold: {}\n".format(x,y,sub,np.max(c_xyK),params['causal_threshold']))
+            if np.max(c_lk.values()) < params['causal_threshold']:
+                return True, sub, list(c_lk.values())
+            else:
+                continue
         else:
-            continue
+            for pair in sample_pairs:
+                if verbose: print("using sample pair ({}, {})".format(pair[0], pair[1]))
+                # samples to calculate W_d^{(k,l)} with
+                sample_kay = samples[pair[0]]
+                sample_ell = samples[pair[1]]
+                # collect variable conditions
+                sub_conds_kay = []
+                sub_conds_ell = []
+                # sample_x is a list of CpnSub's so each needs to be conditioned in seq
+                conditioned_cpnsub_kay = []
+                conditioned_cpnsub_ell = []
+                # calculate distance between j^th agents for later
+                d_y1_y2 = params['agent_distance'](sample_kay[y], sample_ell[y])
+                if verbose:
+                    print("sample_kay__________\nvals: {}\nperts: {}".format([sk.values_to_list() for sk in sample_kay], [sk.perts_to_list() for sk in sample_kay]))
+                    print("sample_ell__________\nvals: {}\nperts: {}".format([sl.values_to_list() for sl in sample_ell], [sl.perts_to_list() for sl in sample_ell]))
+                    print("dist: {}\n".format(d_y1_y2))
+                for agent_ind in range(len(system)):
+                    if agent_ind in sub:
+                        sub_conds_kay.append(sample_kay[agent_ind].perts_to_list())
+                        sub_conds_ell.append(sample_kay[agent_ind].perts_to_list())
+                    elif agent_ind == y:
+                        sub_conds_kay.append(sample_kay[agent_ind].perts_to_list())
+                        sub_conds_ell.append(sample_ell[agent_ind].perts_to_list())
+                    else:
+                        sub_conds_kay.append([np.nan for _ in range(len(sample_kay[agent_ind]))])
+                        sub_conds_ell.append([np.nan for _ in range(len(sample_kay[agent_ind]))])
+                    # add a copy of agent to conditioned samples
+                    conditioned_cpnsub_kay.append(sample_kay[agent_ind].copy())
+                    conditioned_cpnsub_ell.append(sample_ell[agent_ind].copy())
+                    # perform conditioning
+                    # print("type getting condition call: {}".format(type(conditioned_cpnsub_kay[agent_ind])))
+                    # print("subconds: {}".format(sub_conds_kay[agent_ind]))
+                    # print("subconds type: {}".format(type(sub_conds_kay[agent_ind])))
+                    # print("distrn: {}".format(params['sampling_params']['distributions'][agent_ind]))
+                    # print("distrn type: {}".format(type(params['sampling_params']['distributions'][agent_ind])))
+                    # print("test: {}".format(conditioned_cpnsub_kay[agent_ind].test()))
+                    conditioned_cpnsub_kay[agent_ind] = conditioned_cpnsub_kay[agent_ind].condition(
+                            sub_conds_kay[agent_ind], 
+                            params['sampling_params']['distributions'][agent_ind]
+                        )
+                    conditioned_cpnsub_ell[agent_ind] = conditioned_cpnsub_ell[agent_ind].condition(sub_conds_ell[agent_ind], params['sampling_params']['distributions'][agent_ind])
+                if verbose:
+                    print("conditions:\nk: {}\nl: {}\n".format(sub_conds_kay, sub_conds_ell))
+                    print("conditioned_cpnsub_kay__________\nvals: {}\nperts: {}\n".format([sk.values_to_list() for sk in conditioned_cpnsub_kay], [sk.perts_to_list() for sk in conditioned_cpnsub_kay]))
+                    print("conditioned_cpnsub_ell__________\nvals: {}\nperts: {}\n".format([sl.values_to_list() for sl in conditioned_cpnsub_ell], [sl.perts_to_list() for sl in conditioned_cpnsub_ell]))
+                # initialize samples of variable x
+                x_draws = np.zeros(params['N1'] + params['N2'])
+                # 
+                focal_agent = params['sampling_params']['target_variable'][0]
+                focal_var = params['sampling_params']['target_variable'][1]
+                # draw from \mu_{x}(z^k_{K u y)
+                if visual:
+                    spc_changes = []
+                    ang_changes = []
+                kay_perts = []
+                for k1 in range(params['N1']):
+                    for mem_ind in range(len(conditioned_cpnsub_kay)):
+                        for var_ind in range(len(conditioned_cpnsub_kay[mem_ind])):
+                            # perform perturbation of conditioned system
+                            if visual: a0 = conditioned_cpnsub_kay[mem_ind][var_ind].value
+                            conditioned_cpnsub_kay[mem_ind][var_ind].perturb( 
+                                params['sampling_params']['distributions'][mem_ind][var_ind]['variable'], 
+                                params['sampling_params']['distributions'][mem_ind][var_ind]['epsilon'] 
+                            )
+                            if (mem_ind == focal_agent)&(var_ind == focal_var):
+                                kay_perts.append(conditioned_cpnsub_kay[mem_ind][var_ind].perturbation)
+                            if visual: 
+                                if var_ind == 2:
+                                    ang_changes.append(conditioned_cpnsub_kay[mem_ind][var_ind].perturbation - a0)
+                                else:
+                                    spc_changes.append(conditioned_cpnsub_kay[mem_ind][var_ind].perturbation - a0)
+                    # generate new simulation results from the new sample 
+                    sys_kay = [cpn_j.perts_to_list() for cpn_j in conditioned_cpnsub_kay]
+                    if verbose & (k1 == 5): print("going into simulator: {}".format(sys_kay))
+                    # v3.9
+                    # new_mu = simulator(params['sampling_params'] | {
+                    #     'state': [cpn_sub.perts_to_list() for cpn_sub in conditioned_cpnsub_kay], 
+                    #     'perturbation': True
+                    # })
+                    # v3.7
+                    to_update = {
+                        'state': [cpn_sub.perts_to_list() for cpn_sub in conditioned_cpnsub_kay], 
+                        'perturbation': True
+                    }
+                    params['sampling_params'].update(to_update)
+                    new_mu = simulator(params['sampling_params'])
+                    x_draws[k1] = new_mu['state'][focal_agent][focal_var]
+                    if verbose & (k1 == 5): print("coming out of simulator: {}\nx_draw: {}".format(new_mu['state'], x_draws[k1]))
+                if visual:
+                    g, bx = plt.subplots(1,2)
+                    plt.sca(bx[0])
+                    plt.hist(spc_changes, bins=15)
+                    plt.sca(bx[1])
+                    plt.hist(ang_changes, bins=15)
+                    plt.draw()
+                    plt.show()
+                    input("")
+                    plt.close()
+                # draw from \mu_{x}(z^ell_{K u y)
+                ell_perts = []
+                for k2 in range(params['N2']):
+                    for mem_ind in range(len(conditioned_cpnsub_ell)):
+                        for var_ind in range(len(conditioned_cpnsub_ell[mem_ind])):
+                            # perform perturbation of conditioned system
+                            conditioned_cpnsub_ell[mem_ind][var_ind].perturb( 
+                                params['sampling_params']['distributions'][mem_ind][var_ind]['variable'], 
+                                params['sampling_params']['distributions'][mem_ind][var_ind]['epsilon'] 
+                            )
+                            if (mem_ind == focal_agent)&(var_ind == focal_var):
+                                ell_perts.append(conditioned_cpnsub_ell[mem_ind][var_ind].perturbation)
+                    # generate new simulation results from the new sample 
+                    # v3.9
+                    # new_mu = simulator(params['sampling_params'] | {
+                    #     'state': [cpn_sub.perts_to_list() for cpn_sub in conditioned_cpnsub_ell], 
+                    #     'perturbation': True
+                    # })
+                    # v3.7
+                    to_update = {
+                        'state': [cpn_sub.perts_to_list() for cpn_sub in conditioned_cpnsub_ell], 
+                        'perturbation': True
+                    }
+                    params['sampling_params'].update(to_update)
+                    new_mu = simulator(params['sampling_params'])
+                    x_draws[params['N1'] + k2] = new_mu['state'][focal_agent][focal_var]
+                # calculate dependence measure
+                W_kl, _ = estimate_wasserstein(x_draws, params['N1'], params['N2'], cpnsub_system[focal_agent][focal_var])
+                c_xyK.append(W_kl / d_y1_y2)
+                if visual:
+                    plt.ion()
+                    _, ax = plt.subplots(1,2)
+                    # ax[0].hist(c_xyK)
+                    ax[0].hist([kay_perts, ell_perts])
+                    n = ax[1].hist([x_draws[:params['N1']], x_draws[params['N1']:]], bins=np.linspace(-np.pi,np.pi - np.pi/6,11))
+                    ax[1].title.set_text("c: {}\ndist: {}\nDiff: {}".format(
+                        np.round(c_xyK[-1], 4),
+                        np.round(d_y1_y2, 4),
+                        np.sum(np.abs(n[0][0] - n[0][1]))/np.sum(n[0][0])
+                        )
+                    )
+                    plt.draw()
+                    input("Hit enter for next histogram")
+                    plt.close()
+            # # adjust, removing outliers [OPTIONAL]
+            # c_xyK = c_subselect(c_xyK)
+            if sub == []: c = c_xyK
+            # determine whether I(x, y | Z)
+            print("Finished testing I({}, {} | {})\nc_ij^K: {}\ncausal threshold: {}\n".format(x,y,sub,np.max(c_xyK),params['causal_threshold']))
+            if np.max(c_xyK) < params['causal_threshold']:
+                return True, sub, c_xyK
+            else:
+                continue
     # if I(X,Y|Z) for no subset Z, return False (do not eliminate from TPC)
     return False, [], c
 
 
-def hiton(focal_index: int, system: List[List], params: dict):
+def hiton(focal_index: int, system: List[List], params: dict, pool=None):
     """
     Apply the HITON interleaving algorithm of Aliferis, Statnikov, et al. (2010)
     to discover the local causal neighborhood of the `focal_index`th agent.
@@ -358,7 +508,12 @@ def hiton(focal_index: int, system: List[List], params: dict):
     assert (focal_index < len(system)), "Focal index ({}) must be less than system size ({}).".format(focal, len(system))
     print("Building LCN for agent {}.".format(focal_index))
     # prepare parameter data
-    params = define_defaults() | params
+    # v3.9
+    # params = define_defaults() | params
+    # v3.7
+    def_params = define_defaults()
+    def_params.update(params)
+    params = def_params
     # initializing...
     nagents = len(system)
     blocking_set = {}
@@ -374,7 +529,10 @@ def hiton(focal_index: int, system: List[List], params: dict):
     keep_agent = np.zeros(len(OPEN))
     for j in range(len(OPEN)):
         jay = OPEN[j]
-        remove_agent, _, c_ijK = eliminate(focal_index, jay, [], system, params)
+        if pool:
+            remove_agent, _, c_ijK = eliminate(focal_index, jay, [], system, params, pool)
+        else:
+            remove_agent, _, c_ijK = eliminate(focal_index, jay, [], system, params)
         unconditioned_dependence[j] = np.max(c_ijK)
         blocking_set[jay]['null'] = c_ijK
         keep_agent[j] = not remove_agent
@@ -425,11 +583,20 @@ def hiton_iterator(system: List[List], params: dict):
     'conditions' which contains a list of lists in the same format as `system`
     """
     assert ((sys.version_info.major == 3) & (sys.version_info.minor >= 9)), "System error: Update Python to a version >= 3.9.1"
-    params = define_defaults() | params
+    # params = define_defaults() | params
+    def_params = define_defaults()
+    def_params.update(params)
+    params = def_params
     network = {'params': params, 'tpc': {}, 'blocking_set': {}}
     nagents = len(system)
+    # start multiprocessing
+    # pool = mp.Pool(2)
+    pool = None
     for focus in np.arange(nagents, dtype=int):
-        tpc, Z = hiton(focus, system, params)
+        if pool:
+            tpc, Z = hiton(focus, system, params, pool)
+        else:
+            tpc, Z = hiton(focus, system, params)
         network['tpc'][focus] = tpc
         network['blocking_set'][focus] = Z
     return network
